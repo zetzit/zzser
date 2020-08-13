@@ -9,6 +9,6 @@ usage:
 in zz.toml:
 ```toml
 [repos]
-zzser = "github.com/zetzit/zzser"
+zzser = "https://github.com/zetzit/zzser.git"
 
 ```
