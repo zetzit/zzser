@@ -31,6 +31,20 @@ export fn write_u64(slice::mut_slice::MutSlice mut sl, u64  val) -> bool
     return sl.push(0xcf) && sl.push64(byteorder::to_be64(val));
 }
 
+export fn write_uint(slice::mut_slice::MutSlice mut sl, u64  val) -> bool
+    where slice::mut_slice::integrity(&sl)
+{
+    if val <= 255 {
+        return write_u8(sl, (u8)val);
+    } else if val <=  65535 {
+        return write_u16(sl, (u16)val);
+    } else if val <=  4294967295{
+        return write_u32(sl, (u32)val);
+    } else {
+        return write_u64(sl, val);
+    }
+}
+
 export fn write_i8(slice::mut_slice::MutSlice mut sl, i8 val) -> bool
     where slice::mut_slice::integrity(&sl)
 {
@@ -95,7 +109,19 @@ export fn start_map(slice::mut_slice::MutSlice mut sl, usize count) -> bool
     }
 }
 
-export fn start_string(slice::mut_slice::MutSlice mut sl, usize count) -> bool
+export fn start_array(slice::mut_slice::MutSlice mut sl, usize count) -> bool
+    where slice::mut_slice::integrity(&sl)
+{
+    if count <= 15 {
+        return sl.push(0b10010000 | (u8)count);
+    } else if count <= 65535 {
+        return sl.push(0xdc) && sl.push16(byteorder::to_be16(count));
+    } else {
+        return sl.push(0xdd) && sl.push32(byteorder::to_be32(count));
+    }
+}
+
+export fn start_str(slice::mut_slice::MutSlice mut sl, usize count) -> bool
     where slice::mut_slice::integrity(&sl)
 {
     if count <= 31 {
@@ -108,6 +134,14 @@ export fn start_string(slice::mut_slice::MutSlice mut sl, usize count) -> bool
         return sl.push(0xdb) && sl.push32(byteorder::to_be32(count));
     }
 }
+
+export fn write_str(slice::mut_slice::MutSlice mut sl, char *str) -> bool
+    where slice::mut_slice::integrity(&sl)
+    where nullterm(str)
+{
+    return start_str(sl, buffer::strlen(str)) && sl.append_cstr(str);
+}
+
 
 export fn start_bin(slice::mut_slice::MutSlice mut sl, usize count) -> bool
     where slice::mut_slice::integrity(&sl)
@@ -124,6 +158,7 @@ export fn start_bin(slice::mut_slice::MutSlice mut sl, usize count) -> bool
 
 
 export enum ItemType {
+    Invalid,
     Nil,
     Bool,
     Uint,
@@ -136,18 +171,19 @@ export enum ItemType {
 }
 
 export union Value {
-    usize   v_len;
-    bool    v_bool;
-    f64     v_float;
-    u64     v_uint;
-    i64     v_sint;
+    usize           v_len;
+    bool            v_bool;
+    f64             v_float;
+    u64             v_uint;
+    i64             v_sint;
+    slice::Slice    v_slice;
 }
 
 export struct Decoder
 {
     slice::Slice sl;
     usize at;
-    usize skip;
+    usize skip_value;
 
     ItemType    item;
     Value       value;
@@ -167,9 +203,9 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
 {
     static_attest(slice::slice::integrity(&self->sl));
 
-    if self->skip > 0 {
-        unsafe { self->at += self->skip; }
-        self->skip = 0;
+    if self->skip_value > 0 {
+        unsafe { self->at += self->skip_value; }
+        self->skip_value = 0;
     }
 
     if self->at >= self->sl.size {
@@ -202,9 +238,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
                 return false;
             }
             self->at += 1;
-            self->value.v_len = (usize)self->sl.mem[self->at];
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)self->sl.mem[self->at];
             self->at += 1;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
         0xc5 => {
             self->item = ItemType::Bin;
@@ -214,9 +254,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
             }
             u16 mut x = 0;
             memmove(&x, self->sl.mem + self->at + 1, 2);
-            self->value.v_len = (usize)byteorder::from_be16(x);
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)byteorder::from_be16(x);
             self->at += 3;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
         0xc6 => {
             self->item = ItemType::Bin;
@@ -226,9 +270,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
             }
             u32 mut x = 0;
             memmove(&x, self->sl.mem + self->at + 1, 4);
-            self->value.v_len = (usize)byteorder::from_be32(x);
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)byteorder::from_be32(x);
             self->at += 5;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
 
         // str
@@ -239,9 +287,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
                 return false;
             }
             self->at += 1;
-            self->value.v_len = (usize)self->sl.mem[self->at];
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)self->sl.mem[self->at];
             self->at += 1;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
         0xda => {
             self->item = ItemType::Str;
@@ -251,9 +303,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
             }
             u16 mut x = 0;
             memmove(&x, self->sl.mem + self->at + 1, 2);
-            self->value.v_len = (usize)byteorder::from_be16(x);
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)byteorder::from_be16(x);
             self->at += 3;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
         0xdb => {
             self->item = ItemType::Str;
@@ -263,9 +319,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
             }
             u32 mut x = 0;
             memmove(&x, self->sl.mem + self->at + 1, 4);
-            self->value.v_len = (usize)byteorder::from_be32(x);
-            self->skip = self->value.v_len;
+            self->skip_value = (usize)byteorder::from_be32(x);
             self->at += 5;
+
+            self->value.v_slice = slice::slice::Slice {
+                mem:  unsafe<u8*>(self->sl.mem + self->at),
+                size: self->skip_value,
+            };
         }
 
         //float
@@ -450,9 +510,13 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
                 self->at += 1;
             } else if c >= 0xa0 && c <= 0xbf {
                 self->item = ItemType::Str;
-                self->value.v_len = (usize)(c & 0b00011111);
+                self->skip_value = (usize)(c & 0b00011111);
                 self->at += 1;
-                self->skip = self->value.v_len;
+
+                self->value.v_slice = slice::slice::Slice {
+                    mem:  unsafe<u8*>(self->sl.mem + self->at),
+                    size: self->skip_value,
+                };
             } else if c >= 0xe0 && c <= 0xff {
                 self->item = ItemType::Sint;
                 self->value.v_sint = (i64)((i8)c);
@@ -464,7 +528,7 @@ export fn next(Decoder mut *self, err::Err+et mut *e) -> bool
         }
     }
 
-    if self->at + self->skip > self->sl.size {
+    if self->at + self->skip_value > self->sl.size {
         e->fail(DecodingError, "short read value");
         return false;
     }

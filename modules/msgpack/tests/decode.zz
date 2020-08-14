@@ -178,10 +178,10 @@ export fn main() -> int {
                 printf("float %10.5e\n", dc.value.v_float);
             }
             msgpack::ItemType::Bin  => {
-                printf("bin %d '%.*s'\n", dc.value.v_len, dc.value.v_len, unsafe<char*>(dc.sl.mem + dc.at));
+                printf("bin %d '%.*s'\n", dc.value.v_slice.size , dc.value.v_slice.size, dc.value.v_slice.mem);
             }
             msgpack::ItemType::Str  => {
-                printf("string %d '%.*s'\n", dc.value.v_len, dc.value.v_len, unsafe<char*>(dc.sl.mem + dc.at));
+                printf("string %d '%.*s'\n", dc.value.v_slice.size , dc.value.v_slice.size, dc.value.v_slice.mem);
             }
             msgpack::ItemType::Map  => {
                 printf("map %d\n", dc.value.v_len);
